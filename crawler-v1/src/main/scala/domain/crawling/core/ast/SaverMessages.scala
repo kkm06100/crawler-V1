@@ -1,4 +1,4 @@
-package crawling.core.ast
+package domain.crawling.core.ast
 
 object SaverMessages {
 

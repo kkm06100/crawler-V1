@@ -1,4 +1,4 @@
-package crawling.core
+package domain.crawling.core
 
 object UrlDuplicatorActor {
 

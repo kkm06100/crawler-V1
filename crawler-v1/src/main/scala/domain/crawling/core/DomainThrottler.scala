@@ -1,14 +1,20 @@
-package crawling.core
+package domain.crawling.core
 
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.scaladsl.{Behaviors, TimerScheduler}
-import crawling.core.ast.CrawlerMessages.{CheckDomain, DomainCooldownFinished, DomainThrottler}
+import domain.crawling.core.ast.CrawlerMessages.{CheckDomain, DomainCooldownFinished, DomainThrottler}
+import domain.crawling.core.ast.CrawlerMessages.DomainThrottler
 
 import java.net.URI
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.DurationInt
 
 object DomainThrottler {
+
+  def apply(): Behavior[DomainThrottler] =
+    Behaviors.withTimers { timers =>
+      throttling(Map.empty, Set.empty)(timers)
+    }
 
   private def throttling(
                           queueMap: Map[String, Queue[ActorRef[Boolean]]],
