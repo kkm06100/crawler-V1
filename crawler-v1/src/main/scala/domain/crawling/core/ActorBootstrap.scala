@@ -1,94 +1,76 @@
-import system.{ActorDefinition, ActorRegistry, ActorContext}
-import akka.actor.typed.ActorRef
+package bootstrap
 
-import java.util.{Collection, Optional, Collections}
-import java.util.concurrent.ConcurrentHashMap
+import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
+import akka.actor.typed.scaladsl.Behaviors
+import domain.{CrawlerActorContext, CrawlerActorRegistry}
+import system.{ActorDefinition, ActorRegistry}
 
-// 최소 동작하는 ActorRegistry 구현 (Java 인터페이스 기반)
-class SimpleActorRegistry extends ActorRegistry {
+object ActorBootStrap {
 
-  // Context 저장 (id → ActorContext)
-  private val contexts = new ConcurrentHashMap[String, ActorContext]()
+  // 더미 spawnTracker actor 정의
+  object SpawnTrackerActor {
+    sealed trait Command
+    case class Track(actorId: String) extends Command
 
-  // ActorDefinition 저장 (actorId → ActorDefinition)
-  private val actors = new ConcurrentHashMap[String, ActorDefinition]()
-
-  // 단순 등록: Context 저장
-  override def registerContext(context: ActorContext): Unit = {
-    contexts.put(context.getContextId, context)
+    def apply(): Behavior[Command] = Behaviors.receive { (context, message) =>
+      message match {
+        case Track(id) =>
+          context.log.info(s"[SpawnTracker] Tracking actor: $id")
+          Behaviors.same
+      }
+    }
   }
 
-  // Context 조회
-  override def findContextById(contextId: String): Optional[ActorContext] =
-    Optional.ofNullable(contexts.get(contextId))
+  // 더미 도메인 actor 정의
+  object DomainActor {
+    sealed trait Command
+    case object Start extends Command
 
-  // 전체 Context 반환
-  override def getAllContexts(): Collection[ActorContext] =
-    Collections.list(contexts.elements())
-
-  // Context 제거
-  override def removeContext(contextId: String): Unit =
-    contexts.remove(contextId)
-
-  // ActorContext 단순 RoundRobin 선택 (없으면 예외)
-  private val rrIndex = new java.util.concurrent.atomic.AtomicInteger(0)
-  override def selectContext(): ActorContext = {
-    val all = getAllContexts()
-    if (all.isEmpty) throw new IllegalStateException("No contexts registered")
-    val index = rrIndex.getAndUpdate(i => (i + 1) % all.size())
-    all.stream().skip(index).findFirst().get()
+    def apply(): Behavior[Command] = Behaviors.receive { (context, message) =>
+      message match {
+        case Start =>
+          context.log.info(s"[DomainActor] Started!")
+          Behaviors.same
+      }
+    }
   }
-
-  // Context 업데이트 (noop)
-  override def updateContext(context: ActorContext): Unit = ()
-
-  // ActorDefinition 등록 (추가)
-  def register(actorDef: ActorDefinition): Unit = {
-    actors.put(actorDef.actorId(), actorDef)
-  }
-}
-
-// 예제 사용법 일부
-
-object ActorBootstrap {
 
   def main(args: Array[String]): Unit = {
-    // ... ActorSystem, spawnTracker, domainActor 생성 가정
+    val system = ActorSystem[Nothing](Behaviors.setup[Nothing] { context =>
 
-    // 임시 ActorRef[?]를 null로 두고, 실제는 적절히 생성해야 함
-    val spawnTracker: ActorRef[Any] = null.asInstanceOf[ActorRef[Any]]
-    val domainActor: ActorRef[Any] = null.asInstanceOf[ActorRef[Any]]
+      // 1. SpawnTracker 생성
+      val spawnTracker: ActorRef[SpawnTrackerActor.Command] =
+        context.spawn(SpawnTrackerActor(), "spawn-tracker")
 
-    val actorDef = new ActorDefinition(
-      "domainActor1",
-      domainActor,
-      "spawnTracker1",
-      "guardianIdExample"
-    )
+      // 2. DomainActor 생성
+      val domainActor: ActorRef[DomainActor.Command] =
+        context.spawn(DomainActor(), "domain-actor-1")
 
-    val actorRegistry = new SimpleActorRegistry()
+      // 3. Context 생성
+      val actorContextId = "crawler-context-1"
+      val actorContext = new CrawlerActorContext(actorContextId, spawnTracker)
 
-    // ActorContext는 null로 두거나 실제 생성해도 됨
-    val dummyContext = new ActorContext {
-      override def getContextId(): String = "dummyContext"
-      // ActorFactory 메소드 등은 적당히 구현하거나 빈 구현으로 처리
-      override def register(definition: ActorDefinition): Unit = ()
-      override def findById(id: String): Optional[ActorDefinition] = Optional.empty()
-      override def removeActor(actorId: String): Unit = ()
-      override def getSpawnTracker(): ActorRef[_] = spawnTracker
-      override def enqueue(task: Runnable): Unit = ()
-      override def dequeue(): Optional[Runnable] = Optional.empty()
-      override def hasPendingTasks(): Boolean = false
-      override def queueSize(): Int = 0
-      override def isBusy(): Boolean = false
-      override def lastActiveTimestamp(): Long = 0L
-      override def updateLastActive(): Unit = ()
-    }
+      // 4. ActorDefinition 생성
+      val actorDef = new ActorDefinition(
+        "domain-actor-1",              // actorId
+        domainActor,                   // actorRef
+        spawnTracker.path.toString,   // spawnTrackerId
+        "guardian-actor-id",          // guardianId
+      )
 
-    actorRegistry.registerContext(dummyContext)
+      // 5. Registry 생성 및 등록
+      val actorRegistry: ActorRegistry = new CrawlerActorRegistry()
 
-    actorRegistry.register(actorDef)
+      actorContext.register(actorDef)
+      actorRegistry.registerContext(actorContext)
 
-    println("Actor 및 SpawnTracker 정상 등록 완료")
+      // 6. 등록 정보 출력
+      context.log.info(s"[BootStrap] SpawnTracker Path: ${spawnTracker.path}")
+      context.log.info(s"[BootStrap] DomainActor Path: ${domainActor.path}")
+      context.log.info(s"[BootStrap] ActorContext ID: ${actorContext.getContextId}")
+      context.log.info(s"[BootStrap] Actor Registered: ${actorDef.actorId()}")
+
+      Behaviors.empty
+    }, "crawler-actor-system")
   }
 }
