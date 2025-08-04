@@ -1,4 +1,4 @@
-package bootstrap
+package domain.crawling.core
 
 import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
 import akka.actor.typed.scaladsl.Behaviors
