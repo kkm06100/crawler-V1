@@ -1,16 +1,16 @@
-package system
+package system.actors
 
-import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.scaladsl.Behaviors
-import system.ast.SystemMessages.{AddActor, AddActorAlreadyExists, AddActorSuccess, AddActors, AddActorsResponse, GetActor, GetActorNotFound, GetActorResponse, GetActorSuccess, GetActors, GetActorsResponse, RemoveActor, RemoveActorNotFound, RemoveActorSuccess, RemoveActors, RemoveActorsResponse, SpawnTrackerRequest}
+import akka.actor.typed.{ActorRef, Behavior}
+import system.ast.SystemMessages._
 
-object SpawnTrackerActor {
+object SpawnTracker {
 
-  def apply(): Behavior[SpawnTrackerRequest] = {
+  def apply(): Behavior[SpawnRequest] = {
     saveActors(Map.empty)
   }
 
-  private def saveActors(actorsMap: Map[String, ActorRef[_]]): Behavior[SpawnTrackerRequest] =
+  private def saveActors(actorsMap: Map[String, ActorRef[_]]): Behavior[SpawnRequest] =
     Behaviors.receiveMessage {
       case AddActor(key, actor, replyTo) =>
         if (actorsMap.contains(key)) {
@@ -77,6 +77,5 @@ object SpawnTrackerActor {
           notFound = notFound
         )
         Behaviors.same
-
     }
 }

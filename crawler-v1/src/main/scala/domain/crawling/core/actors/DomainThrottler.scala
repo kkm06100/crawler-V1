@@ -1,9 +1,8 @@
-package domain.crawling.core
+package domain.crawling.core.actors
 
-import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.scaladsl.{Behaviors, TimerScheduler}
+import akka.actor.typed.{ActorRef, Behavior}
 import domain.crawling.core.ast.CrawlerMessages.{CheckDomain, DomainCooldownFinished, DomainThrottler}
-import domain.crawling.core.ast.CrawlerMessages.DomainThrottler
 
 import java.net.URI
 import scala.collection.immutable.Queue

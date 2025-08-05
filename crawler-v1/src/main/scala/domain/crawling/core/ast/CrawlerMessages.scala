@@ -1,7 +1,7 @@
 package domain.crawling.core.ast
 
 import akka.actor.typed.ActorRef
-import domain.crawling.core.status.Status
+import domain.crawling.core.Status
 
 object CrawlerMessages {
 

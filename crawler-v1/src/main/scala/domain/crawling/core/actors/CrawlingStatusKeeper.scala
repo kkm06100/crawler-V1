@@ -1,9 +1,9 @@
-package domain.crawling.core
+package domain.crawling.core.actors
 
 import akka.actor.typed.Behavior
 import akka.actor.typed.scaladsl.Behaviors
-import domain.crawling.core.ast.CrawlerMessages.{ChangeDeny, ChangeProcessing, ChangeScheduled, ChangeTerminated, GetStatus, StatusKeeper}
-import domain.crawling.core.status.{Created, Deny, Processing, Scheduled, Status, Terminated}
+import domain.crawling.core.{Created, Deny, Processing, Scheduled, Status, Terminated}
+import domain.crawling.core.ast.CrawlerMessages._
 
 object CrawlingStatusKeeper {
 

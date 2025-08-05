@@ -1,4 +1,4 @@
-package domain.crawling.core
+package domain.crawling.core.actors
 
 object CrawledInformationSaver {
 

@@ -1,4 +1,4 @@
-package domain.crawling.core.status
+package domain.crawling.core
 
 sealed trait Status
 case object Created extends Status
