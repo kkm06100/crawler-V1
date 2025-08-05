@@ -1,158 +1,133 @@
 package system.actors
 
+import akka.actor.TypedActor.context
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.scaladsl.Behaviors
 import system.ast.SystemMessages._
 import akka.util.Timeout
+import akka.actor.typed.scaladsl.AskPattern._
+
 import scala.concurrent.duration._
-import scala.util.Try
+import scala.util.{Try, Failure => ScalaFailure, Success => ScalaSuccess}
+import akka.actor.typed.Scheduler
+
+implicit val scheduler: Scheduler = context.system.scheduler.asInstanceOf[Scheduler]
 
 object SpawnManager {
 
-  // 내부 핸들링용
+  // 내부 메시지 최소화
   private sealed trait InternalCommand extends Command
-  private final case class HandleAddActorResponse(response: Try[AddActorResponse], replyTo: ActorRef[ManagerResponse]) extends InternalCommand
-  private final case class HandleAddActorsResponse(response: Try[AddActorsResponse], replyTo: ActorRef[ManagerResponse]) extends InternalCommand
-  private final case class HandleGetActorResponse(response: Try[GetActorResponse], replyTo: ActorRef[ManagerResponse]) extends InternalCommand
-  private final case class HandleGetActorsResponse(response: Try[GetActorsResponse], replyTo: ActorRef[ManagerResponse]) extends InternalCommand
-  private final case class HandleRemoveActorResponse(response: Try[RemoveActorResponse], replyTo: ActorRef[ManagerResponse]) extends InternalCommand
-  private final case class HandleRemoveActorsResponse(response: Try[RemoveActorsResponse], replyTo: ActorRef[ManagerResponse]) extends InternalCommand
-
-  // 외부에서 사용할 메시지
-  final case class CreateActor[T](
-                                   key: String,
-                                   behavior: Behavior[T],
-                                   nameHint: String,
-                                   replyTo: ActorRef[ManagerResponse]
-                                 ) extends Command
+  private final case class WrappedResponse(replyTo: ActorRef[ManagerResponse], result: Try[SpawnResponse]) extends InternalCommand
+  private final case class MultipleAddActorsResult[T](
+                                                       replyTo: ActorRef[ManagerResponse],
+                                                       behaviors: Map[String, Behavior[T]],
+                                                       successes: Seq[String],
+                                                       failures: Seq[String]
+                                                     ) extends InternalCommand
 
   def apply(spawnTracker: ActorRef[SpawnRequest]): Behavior[Command] = Behaviors.setup { context =>
     implicit val timeout: Timeout = 3.seconds
 
     Behaviors.receiveMessage {
 
-      // 1. Spawn & 등록
-      case CreateActor(key, behavior, nameHint, replyTo) =>
-        val name = s"${nameHint}_$key"
+      case RegisterSingle(key, behavior, replyTo) =>
+        val name = key
         val actorRef = context.spawn(behavior, name)
 
-        context.ask(spawnTracker, (ref: ActorRef[AddActorResponse]) => AddActor(key, actorRef, ref)) {
-          case scala.util.Success(AddActorSuccess) =>
-            HandleAddActorResponse(scala.util.Success(AddActorSuccess), replyTo)
-          case scala.util.Success(AddActorAlreadyExists) =>
-            HandleAddActorResponse(scala.util.Success(AddActorAlreadyExists), replyTo)
-          case scala.util.Failure(ex) =>
-            HandleAddActorResponse(scala.util.Failure(ex), replyTo)
+        context.ask(spawnTracker, AddActor(key, actorRef, _)) {
+          case ScalaSuccess(r) => WrappedResponse(replyTo, ScalaSuccess(r))
+          case ScalaFailure(e) => WrappedResponse(replyTo, ScalaFailure(e))
         }
-
-        Behaviors.same
-
-      case HandleAddActorResponse(response, replyTo) =>
-        response match {
-          case scala.util.Success(AddActorSuccess) =>
-            replyTo ! Success("생성 및 등록 완료")
-          case scala.util.Success(AddActorAlreadyExists) =>
-            replyTo ! Failure("이미 존재하는 키입니다")
-          case scala.util.Failure(ex) =>
-            replyTo ! Failure(s"예외 발생: ${ex.getMessage}")
+        context.ask(spawnTracker, AddActor(key, actorRef, _)) {
+          case ScalaSuccess(r) => WrappedResponse(replyTo, ScalaSuccess(r))
+          case ScalaFailure(e) => WrappedResponse(replyTo, ScalaFailure(e))
         }
         Behaviors.same
 
-      // 2. 기존 actor 등록
-      case RegisterSingle(key, actor, replyTo) =>
-        context.ask(spawnTracker, (ref: ActorRef[AddActorResponse]) => AddActor(key, actor, ref)) {
-          HandleAddActorResponse(_, replyTo)
+      case RegisterMultiple(behaviors, replyTo) =>
+        val placeholderRefs = behaviors.view.mapValues(_ => context.system.ignoreRef).toMap
+
+        context.ask(spawnTracker, AddActors(placeholderRefs, _)) {
+          case ScalaSuccess(AddActorsResponse(successes, failures)) =>
+            MultipleAddActorsResult(replyTo, behaviors, successes, failures)
+          case ScalaSuccess(other) =>
+            WrappedResponse(replyTo, ScalaSuccess(other))
+          case ScalaFailure(ex) =>
+            WrappedResponse(replyTo, ScalaFailure(ex))
         }
         Behaviors.same
 
-      case RegisterMultiple(actors, replyTo) =>
-        context.ask(spawnTracker, (ref: ActorRef[AddActorsResponse]) => AddActors(actors, ref)) {
-          HandleAddActorsResponse(_, replyTo)
-        }
-        Behaviors.same
+      case MultipleAddActorsResult(replyTo, behaviors, successes, failures) =>
+        if (failures.nonEmpty) {
+          replyTo ! Failure(s"일부 실패: ${failures.mkString(", ")}")
+          Behaviors.same
+        } else {
+          // 성공한 키들만 실제 액터 스폰
+          val actualSpawned = successes.map { key =>
+            val behavior = behaviors(key)
+            val ref = context.spawn(behavior, key)
+            key -> ref
+          }.toMap
 
-      case HandleAddActorsResponse(response, replyTo) =>
-        response match {
-          case scala.util.Success(AddActorsResponse(successes, failures)) =>
-            if (failures.nonEmpty)
-              replyTo ! Failure(s"일부 실패 - 성공: ${successes.mkString(", ")}, 실패: ${failures.mkString(", ")}")
-            else
-              replyTo ! Success(s"모두 등록 성공: ${successes.mkString(", ")}")
-          case scala.util.Failure(ex) =>
-            replyTo ! Failure(s"예외 발생: ${ex.getMessage}")
+          context.pipeToSelf(spawnTracker.ask[AddActorsResponse](ref => AddActors(actualSpawned, ref))) {
+            case ScalaSuccess(r) => WrappedResponse(replyTo, ScalaSuccess(r))
+            case ScalaFailure(e) => WrappedResponse(replyTo, ScalaFailure(e))
+          }
+          Behaviors.same
         }
-        Behaviors.same
 
-      // 3. 조회
       case LookupActor(key, replyTo) =>
-        context.ask(spawnTracker, (ref: ActorRef[GetActorResponse]) => GetActor(key, ref)) {
-          HandleGetActorResponse(_, replyTo)
-        }
-        Behaviors.same
-
-      case HandleGetActorResponse(response, replyTo) =>
-        response match {
-          case scala.util.Success(GetActorSuccess(actorRef)) =>
-            replyTo ! FoundActor(actorRef)
-          case scala.util.Success(GetActorNotFound()) =>
-            replyTo ! Failure(s"찾을 수 없음")
-          case scala.util.Failure(ex) =>
-            replyTo ! Failure(s"예외 발생: ${ex.getMessage}")
+        context.ask(spawnTracker, GetActor(key, _)) {
+          case ScalaSuccess(r) => WrappedResponse(replyTo, ScalaSuccess(r))
+          case ScalaFailure(e) => WrappedResponse(replyTo, ScalaFailure(e))
         }
         Behaviors.same
 
       case LookupActors(keys, replyTo) =>
-        context.ask(spawnTracker, (ref: ActorRef[GetActorsResponse]) => GetActors(keys, ref)) {
-          HandleGetActorsResponse(_, replyTo)
+        context.ask(spawnTracker, GetActors(keys, _)) {
+          case ScalaSuccess(r) => WrappedResponse(replyTo, ScalaSuccess(r))
+          case ScalaFailure(e) => WrappedResponse(replyTo, ScalaFailure(e))
         }
         Behaviors.same
 
-      case HandleGetActorsResponse(response, replyTo) =>
-        response match {
-          case scala.util.Success(GetActorsResponse(found, notFound)) =>
-            if (notFound.nonEmpty)
-              replyTo ! Failure(s"일부 누락 - 발견: ${found.keySet.mkString(", ")}, 없음: ${notFound.mkString(", ")}")
-            else
-              replyTo ! FoundActors(found)
-          case scala.util.Failure(ex) =>
-            replyTo ! Failure(s"예외 발생: ${ex.getMessage}")
-        }
-        Behaviors.same
-
-      // 4. 삭제
       case DeregisterSingle(key, replyTo) =>
-        context.ask(spawnTracker, (ref: ActorRef[RemoveActorResponse]) => RemoveActor(key, ref)) {
-          HandleRemoveActorResponse(_, replyTo)
-        }
-        Behaviors.same
-
-      case HandleRemoveActorResponse(response, replyTo) =>
-        response match {
-          case scala.util.Success(RemoveActorSuccess) =>
-            replyTo ! Success(s"삭제 완료")
-          case scala.util.Success(RemoveActorNotFound) =>
-            replyTo ! Failure(s"없음")
-          case scala.util.Failure(ex) =>
-            replyTo ! Failure(s"예외 발생: ${ex.getMessage}")
+        context.ask(spawnTracker, RemoveActor(key, _)) {
+          case ScalaSuccess(r) => WrappedResponse(replyTo, ScalaSuccess(r))
+          case ScalaFailure(e) => WrappedResponse(replyTo, ScalaFailure(e))
         }
         Behaviors.same
 
       case DeregisterMultiple(keys, replyTo) =>
-        context.ask(spawnTracker, (ref: ActorRef[RemoveActorsResponse]) => RemoveActors(keys, ref)) {
-          HandleRemoveActorsResponse(_, replyTo)
+        context.ask(spawnTracker, RemoveActors(keys, _)) {
+          case ScalaSuccess(r) => WrappedResponse(replyTo, ScalaSuccess(r))
+          case ScalaFailure(e) => WrappedResponse(replyTo, ScalaFailure(e))
         }
         Behaviors.same
 
-      case HandleRemoveActorsResponse(response, replyTo) =>
+      case WrappedResponse(replyTo, ScalaSuccess(response)) =>
         response match {
-          case scala.util.Success(RemoveActorsResponse(successes, failures)) =>
-            if (failures.nonEmpty)
-              replyTo ! Failure(s"일부 실패 - 삭제: ${successes.mkString(", ")}, 없음: ${failures.mkString(", ")}")
-            else
-              replyTo ! Success(s"모두 삭제 성공: ${successes.mkString(", ")}")
-          case scala.util.Failure(ex) =>
-            replyTo ! Failure(s"예외 발생: ${ex.getMessage}")
+          case AddActorSuccess           => replyTo ! Success("등록 성공")
+          case AddActorAlreadyExists     => replyTo ! Failure("이미 존재")
+
+          case AddActorsResponse(ok, fail) =>
+            replyTo ! (if (fail.nonEmpty) Failure(s"일부 실패: ${fail.mkString(", ")}") else Success(s"등록 성공: ${ok.mkString(", ")}"))
+
+          case GetActorSuccess(ref)        => replyTo ! FoundActor(ref)
+          case GetActorNotFound()          => replyTo ! Failure("찾을 수 없음")
+
+          case GetActorsResponse(found, nf) =>
+            replyTo ! (if (nf.nonEmpty) Failure(s"일부 없음: ${nf.mkString(", ")}") else FoundActors(found))
+
+          case RemoveActorSuccess           => replyTo ! Success("삭제 완료")
+          case RemoveActorNotFound          => replyTo ! Failure("없음")
+
+          case RemoveActorsResponse(ok, fail) =>
+            replyTo ! (if (fail.nonEmpty) Failure(s"일부 실패: ${fail.mkString(", ")}") else Success(s"삭제 성공: ${ok.mkString(", ")}"))
         }
+        Behaviors.same
+
+      case WrappedResponse(replyTo, ScalaFailure(ex)) =>
+        replyTo ! Failure(s"예외 발생: ${ex.getMessage}")
         Behaviors.same
     }
   }

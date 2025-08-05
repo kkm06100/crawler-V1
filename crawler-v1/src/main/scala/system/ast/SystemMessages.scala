@@ -1,6 +1,6 @@
 package system.ast
 
-import akka.actor.typed.ActorRef
+import akka.actor.typed.{ActorRef, Behavior}
 
 object SystemMessages {
 
@@ -70,12 +70,12 @@ object SystemMessages {
 
   final case class RegisterSingle(
                                    key: String,
-                                   actor: ActorRef[_],
+                                   behavior: Behavior[_],
                                    replyTo: ActorRef[ManagerResponse]
                                  ) extends Command
 
   final case class RegisterMultiple(
-                                     actors: Map[String, ActorRef[_]],
+                                     behaviors: Map[String, Behavior[Any]],
                                      replyTo: ActorRef[ManagerResponse]
                                    ) extends Command
 
