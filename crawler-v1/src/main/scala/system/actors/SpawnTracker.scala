@@ -4,13 +4,16 @@ import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.{ActorRef, Behavior}
 import system.ast.SystemMessages._
 
+/**
+ * 직접 호출하지 말 것
+ */
 object SpawnTracker {
 
-  def apply(): Behavior[SpawnRequest] = {
+  def apply(): Behavior[TrackerRequest] = {
     saveActors(Map.empty)
   }
 
-  private def saveActors(actorsMap: Map[String, ActorRef[_]]): Behavior[SpawnRequest] =
+  private def saveActors(actorsMap: Map[String, ActorRef[_]]): Behavior[TrackerRequest] =
     Behaviors.receiveMessage {
       case AddActor(key, actor, replyTo) =>
         if (actorsMap.contains(key)) {
@@ -35,7 +38,7 @@ object SpawnTracker {
           }
         }
 
-        replyTo ! AddActorsResponse(successes.toList, failures.toList)
+        replyTo ! AddActorsTrackerResponse(successes.toList, failures.toList)
         saveActors(updatedMap)
 
       case RemoveActor(key, replyTo) =>
@@ -52,7 +55,7 @@ object SpawnTracker {
         val (found, notFound) = keys.partition(actorsMap.contains)
 
         val updated = actorsMap -- found
-        replyTo ! RemoveActorsResponse(
+        replyTo ! RemoveActorsTrackerResponse(
           successes = found.toSeq,
           failures = notFound.toSeq
         )
@@ -72,7 +75,7 @@ object SpawnTracker {
         val (found, notFound) = keys.partition(actorsMap.contains)
 
         val result = found.map(k => k -> actorsMap(k)).toMap
-        replyTo ! GetActorsResponse(
+        replyTo ! GetActorsTrackerResponse(
           found = result,
           notFound = notFound
         )
