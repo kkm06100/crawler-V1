@@ -4,7 +4,7 @@ import akka.actor.typed.{ActorSystem, Behavior}
 import system.actors.{SpawnManager, SpawnTracker}
 import system.ast.SystemMessages.ActorContextPair
 
-final case class ActorContextGenerator(
+final case class ActorManagerGenerator(
                                                 private val contexts: Map[String, ActorContextPair]
                                               ) {
   def getContext(id: String): Option[ActorContextPair] =
@@ -14,13 +14,13 @@ final case class ActorContextGenerator(
     contexts
 }
 
-object ActorContextGenerator {
+object ActorManagerGenerator {
 
   def initialize(
                   registryId: String,
                   contextCount: Int,
                   actors: Map[String, Behavior[_]]
-                )(implicit system: ActorSystem[_]): ActorContextGenerator = {
+                )(implicit system: ActorSystem[_]): ActorManagerGenerator = {
 
     val contextMap: Map[String, ActorContextPair] = (1 to contextCount).map { idx =>
       val contextId = s"$registryId-$idx"
@@ -33,6 +33,6 @@ object ActorContextGenerator {
       contextId -> new ActorContextPair(manager, facade)
     }.toMap
 
-    new ActorContextGenerator(contextMap)
+    new ActorManagerGenerator(contextMap)
   }
 }
